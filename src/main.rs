@@ -56,7 +56,13 @@ fn tokenize(source: &str) -> Vec<String> {
         match c {
             '"' => {
                 inside_quotes = !inside_quotes;
-                current_token.push(c);
+                if inside_quotes && !current_token.is_empty() {
+                    tokens.push(current_token.trim().to_string());
+                    current_token.clear();
+                } else if !inside_quotes {
+                    tokens.push(current_token.trim().to_string());
+                    current_token.clear();
+                }
             },
             ' ' if !inside_quotes => {
                 if !current_token.is_empty() {
@@ -69,7 +75,7 @@ fn tokenize(source: &str) -> Vec<String> {
     }
 
     if !current_token.is_empty() {
-        tokens.push(current_token);
+        tokens.push(current_token.trim().to_string());
     }
 
     tokens
