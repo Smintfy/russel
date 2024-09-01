@@ -1,4 +1,4 @@
-use std::io::{self, Error, Write};
+use std::io::{self, Write};
 use std::{env, process};
 use std::path::{Path, PathBuf};
 use std::fs;
@@ -20,15 +20,12 @@ fn run() {
     loop {
         let home = env::var("HOME").unwrap();
         let raw_cwd = get_cwd();
-        let cwd = raw_cwd.to_str().unwrap();
 
-        let alias_home_cwd = cwd.replace(&home, "~");
-        let simplified_cwd = cwd.split('/').last().unwrap();
-
-        let git_branch = get_git_branch(&raw_cwd).unwrap();
+        let simplified_cwd = get_simplified_cwd(&raw_cwd, &home);
+        let git_branch = get_git_branch(&raw_cwd).unwrap_or_default();
 
         let prompt = if git_branch.is_empty() {
-            format!("{}{}@{}{}: {}$ ", YELLOW, username.trim(), hostname.trim(), RESET, alias_home_cwd)
+            format!("{}{}@{}{}: {}$ ", YELLOW, username.trim(), hostname.trim(), RESET, simplified_cwd)
         } else {
             format!("{}{}@{}{}: {} {}[{}]{}$ ", YELLOW, username.trim(), hostname.trim(), RESET, simplified_cwd, YELLOW, git_branch, RESET)
         };
@@ -36,18 +33,46 @@ fn run() {
         print!("{}", prompt);
         io::stdout().flush().unwrap();
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        let mut source = String::new();
+        io::stdin().read_line(&mut source).unwrap();
 
-        let source = input.trim();
+        let input = source.trim();
         
-        if source.is_empty() {
+        if input.is_empty() {
             continue;
         }
 
-        let sequence: Vec<&str> = source.split_whitespace().collect();
-        execute(sequence);
+        let tokens = tokenize(&input);
+        execute(tokens);
     }
+}
+
+fn tokenize(source: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current_token = String::new();
+    let mut inside_quotes = false;
+
+    for c in source.chars() {
+        match c {
+            '"' => {
+                inside_quotes = !inside_quotes;
+                current_token.push(c);
+            },
+            ' ' if !inside_quotes => {
+                if !current_token.is_empty() {
+                    tokens.push(current_token.trim().to_string());
+                    current_token.clear();
+                }
+            },
+            _ => current_token.push(c),
+        }
+    }
+
+    if !current_token.is_empty() {
+        tokens.push(current_token);
+    }
+
+    tokens
 }
 
 fn find_cmd_path(cmd: &str) -> Option<String> {
@@ -65,23 +90,52 @@ fn get_command_output(command: &str) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn get_git_branch(cwd: &PathBuf) -> Result<String, Error> {
-    let git_head_path = cwd.join(".git").join("HEAD");
+fn get_git_root(path: &Path) -> Option<PathBuf> {
+    let mut current = path.to_path_buf();
+    loop {
+        if current.join(".git").is_dir() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
 
-    if git_head_path.exists() {
-        let head_content = fs::read_to_string(&git_head_path).unwrap();
-        let branch_name = head_content.trim().split('/').last().map(String::from).unwrap();
-        Ok(branch_name)
+fn get_git_branch(cwd: &Path) -> Result<String, io::Error> {
+    if let Some(git_root) = get_git_root(cwd) {
+        let git_head_path = git_root.join(".git").join("HEAD");
+        let head_content = fs::read_to_string(git_head_path)?;
+        Ok(head_content
+            .trim()
+            .strip_prefix("ref: refs/heads/")
+            .unwrap_or("")
+            .to_string())
     } else {
         Ok(String::new())
     }
 }
 
-fn execute(tokens: Vec<&str>) {
+fn get_simplified_cwd(cwd: &Path, home: &str) -> String {
+    if let Some(git_root) = get_git_root(cwd) {
+        let relative = cwd.strip_prefix(&git_root).unwrap_or(cwd);
+        if relative.as_os_str().is_empty() {
+            git_root.file_name().unwrap().to_str().unwrap().to_string()
+        } else {
+            format!("{}/{}",
+                    git_root.file_name().unwrap().to_str().unwrap(),
+                    relative.to_str().unwrap())
+        }
+    } else {
+        cwd.to_str().unwrap().replace(home, "~")
+    }
+}
+
+fn execute(tokens: Vec<String>) {
     let (cmd, args) = tokens.split_first().unwrap();
 
-    if BUILTIN_CMDS.contains(cmd) {
-        match *cmd {
+    if BUILTIN_CMDS.contains(&cmd.as_str()) {
+        match cmd.as_str() {
             "exit" => execute_exit(args),
             "echo" => execute_echo(args),
             "type" => execute_type(args),
@@ -99,7 +153,7 @@ fn execute(tokens: Vec<&str>) {
     }
 }
 
-fn execute_exit(args: &[&str]) {
+fn execute_exit(args: &[String]) {
     match args.len() {
         0 => process::exit(0),
         1 => {
@@ -111,13 +165,13 @@ fn execute_exit(args: &[&str]) {
     }
 }
 
-fn execute_echo(args: &[&str]) {
+fn execute_echo(args: &[String]) {
     println!("{}", args.join(" "));
 }
 
-fn execute_type(args: &[&str]) {
+fn execute_type(args: &[String]) {
     for arg in args {
-        if BUILTIN_CMDS.contains(arg) {
+        if BUILTIN_CMDS.contains(&arg.as_str()) {
             println!("{} is a shell builtin", arg);
         } else if let Some(env_path) = find_cmd_path(arg) {
             println!("{} is {}", arg, env_path)
@@ -131,7 +185,7 @@ fn execute_pwdir() {
     println!("{}", get_cwd().display());
 }
 
-fn execute_cd(args: &[&str]) {
+fn execute_cd(args: &[String]) {
     let home = env::var("HOME").unwrap();
     let mut target_dir = args[0].to_string();
 
