@@ -1,6 +1,7 @@
-use std::io::{self, Write};
+use std::io::{self, Error, Write};
 use std::{env, process};
 use std::path::{Path, PathBuf};
+use std::fs;
 
 // TODO: Use enum instead.
 const BUILTIN_CMDS: [&str; 5] = ["exit", "echo", "type", "pwd", "cd"];
@@ -13,18 +14,26 @@ fn run() {
     const YELLOW: &str = "\x1b[33m";
     const RESET: &str = "\x1b[0m";
 
-    let username = String::from_utf8(
-        process::Command::new("whoami").output().unwrap().stdout
-    ).unwrap();
-    let hostname = String::from_utf8(
-        process::Command::new("hostname").output().unwrap().stdout
-    ).unwrap();
+    let username = get_command_output("whoami");
+    let hostname = get_command_output("hostname");
 
     loop {
-        let cwd = get_cwd();
-        let simplified_cwd = cwd.to_str().unwrap().split('/').last().unwrap();
+        let home = env::var("HOME").unwrap();
+        let raw_cwd = get_cwd();
+        let cwd = raw_cwd.to_str().unwrap();
 
-        print!("{}{}@{}{}: {}$ ", YELLOW, username.trim(), hostname.trim(), RESET, simplified_cwd.replace("\"", ""));
+        let alias_home_cwd = cwd.replace(&home, "~");
+        let simplified_cwd = cwd.split('/').last().unwrap();
+
+        let git_branch = get_git_branch(&raw_cwd).unwrap();
+
+        let prompt = if git_branch.is_empty() {
+            format!("{}{}@{}{}: {}$ ", YELLOW, username.trim(), hostname.trim(), RESET, alias_home_cwd)
+        } else {
+            format!("{}{}@{}{}: {} {}[{}]{}$ ", YELLOW, username.trim(), hostname.trim(), RESET, simplified_cwd, YELLOW, git_branch, RESET)
+        };
+
+        print!("{}", prompt);
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
@@ -49,6 +58,23 @@ fn find_cmd_path(cmd: &str) -> Option<String> {
 
 fn get_cwd() -> PathBuf {
     env::current_dir().unwrap()
+}
+
+fn get_command_output(command: &str) -> String {
+    let output = process::Command::new(command).output().expect("Failed to execute command");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn get_git_branch(cwd: &PathBuf) -> Result<String, Error> {
+    let git_head_path = cwd.join(".git").join("HEAD");
+
+    if git_head_path.exists() {
+        let head_content = fs::read_to_string(&git_head_path).unwrap();
+        let branch_name = head_content.trim().split('/').last().map(String::from).unwrap();
+        Ok(branch_name)
+    } else {
+        Ok(String::new())
+    }
 }
 
 fn execute(tokens: Vec<&str>) {
