@@ -7,6 +7,6 @@ Bin it.
 
 ### Some TODOs
 
-- [ ] Display git branch name along with simplified path if the current directory is a git repo otherwise show the full path.
+- [x] Display git branch name along with simplified path if the current directory is a git repo otherwise show the full path.
 - [ ] Autocompletion.
 - [ ] Support for chaining operations or commands.
